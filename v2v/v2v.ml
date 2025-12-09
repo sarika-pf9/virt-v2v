@@ -501,6 +501,7 @@ read the man page virt-v2v(1).
     root_choice;
     static_ips;
     customize_ops;
+    no_fstrim = false;
   } in
 
   (* Before starting the input module, check there is sufficient

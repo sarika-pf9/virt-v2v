@@ -38,6 +38,7 @@ type options = {
   root_choice : root_choice;
   static_ips : static_ip list;
   customize_ops : Customize_cmdline.ops;
+  no_fstrim : bool;
 }
 
 (* Mountpoint stats, used for free space estimation. *)
@@ -105,8 +106,11 @@ let rec convert dir options source =
    * because unused blocks are marked in the overlay and thus do
    * not have to be copied.
    *)
-  message (f_"Mapping filesystem data to avoid copying unused and blank areas");
-  do_fstrim g inspect;
+  if not options.no_fstrim then (
+    message (f_"Mapping filesystem data to avoid copying unused and blank areas");
+    do_fstrim g inspect
+  ) else
+    message (f_"Skipping fstrim (--no-fstrim specified)");
 
   message (f_"Closing the overlay");
   g#umount_all ();

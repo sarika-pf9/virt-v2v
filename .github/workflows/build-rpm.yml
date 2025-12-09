@@ -1,0 +1,96 @@
+name: Build virt-v2v RPM 2.7.13
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:42
+
+    steps:
+      - name: Install git first
+        run: dnf install -y git
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y rpm-build rpmdevtools git sqlite perl-hivex \
+                          autoconf automake libtool
+          dnf builddep -y virt-v2v
+
+      - name: Setup rpmbuild tree under /root
+        run: |
+          rpmdev-setuptree
+          mkdir -p /root/rpmbuild/{SPECS,SOURCES,BUILD,BUILDROOT,RPMS,SRPMS}
+
+      - name: Build patched tarball (autoreconf + make dist)
+        working-directory: ${{ github.workspace }}
+        run: |
+          autoreconf -fiv
+          ./configure
+          make dist
+
+      - name: Verify tarball name
+        working-directory: ${{ github.workspace }}
+        run: |
+          ls -lh virt-v2v-2.7.13.tar.gz
+
+      - name: Download & extract upstream SRPM
+        run: |
+          cd /root
+          dnf download --source virt-v2v \
+                       --enablerepo=fedora-source \
+                       --enablerepo=updates-source \
+                       --skip-unavailable
+
+          mkdir -p /tmp/srpm-extract
+          cd /tmp/srpm-extract
+          rpm2cpio /root/virt-v2v-*.src.rpm | cpio -idmv
+          
+          # Move spec and sources to build tree
+          mv virt-v2v.spec /root/rpmbuild/SPECS/
+          cp *.keyring /root/rpmbuild/SOURCES/ 2>/dev/null || true
+          cp *.sig     /root/rpmbuild/SOURCES/ 2>/dev/null || true
+
+      - name: Copy patched tarball to SOURCES
+        run: |
+          cp /__w/virt-v2v/virt-v2v/virt-v2v-2.7.13.tar.gz /root/rpmbuild/SOURCES/
+       
+      - name: Patch spec file
+        run: |
+          SPEC_FILE="/root/rpmbuild/SPECS/virt-v2v.spec"
+
+          # 1. Disable GPG checks
+          sed -i 's/^\([[:space:]]*\)%{gpgverify}/#\1%{gpgverify}/' $SPEC_FILE
+          sed -i 's/%global verify_tarball_signature 1/%global verify_tarball_signature 0/' $SPEC_FILE || true
+
+          # 2. Force Version to 2.7.13
+          sed -i 's/^Version:.*/Version: 2.7.13/'  $SPEC_FILE
+          sed -i 's/^Release:.*/Release: 1.fc42/' $SPEC_FILE
+
+          # 3. Remove files that are missing in our build (oVirt support)
+          sed -i '/virt-v2v-open/d' $SPEC_FILE
+          sed -i '/virt-v2v-output-ovirt/d' $SPEC_FILE
+
+      - name: Build RPM (With Ignore Unpackaged Files)
+        run: |
+          cd /root/rpmbuild/SPECS
+          # Added _unpackaged_files_terminate_build 0 to ignore the extra RHV man page
+          rpmbuild -bb \
+            --define "_topdir /root/rpmbuild" \
+            --define "_unpackaged_files_terminate_build 0" \
+            --nocheck \
+            virt-v2v.spec
+
+      - name: Upload built RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: virt-v2v-2.7.13-rpm
+          path: /root/rpmbuild/RPMS/x86_64/*.rpm

@@ -24,6 +24,7 @@ type options = {
   root_choice : Types.root_choice; (** [--root] option *)
   static_ips : Types.static_ip list; (** [--mac :ip:] option *)
   customize_ops : Customize_cmdline.ops; (** virt-customize options *)
+  no_fstrim : bool;                (** [--no-fstrim] option *)
 }
 
 val convert : string -> options -> Types.source -> Types.inspect * Types.target_meta
