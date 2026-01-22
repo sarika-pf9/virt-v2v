@@ -22,7 +22,7 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf install -y rpm-build rpmdevtools git sqlite perl-hivex \
-                          autoconf automake libtool
+                          autoconf automake libtool dnf-plugins-core cpio
           dnf builddep -y virt-v2v
 
       - name: Setup rpmbuild tree under /root
@@ -40,7 +40,11 @@ jobs:
       - name: Verify tarball name
         working-directory: ${{ github.workspace }}
         run: |
-          ls -lh virt-v2v-2.7.13.tar.gz
+          ls -lh virt-v2v-*.tar.*
+          TARBALL="$(ls -1 virt-v2v-*.tar.* | head -n 1)"
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+          VV2V_VERSION="$(echo "$TARBALL" | sed -n 's/^virt-v2v-\(.*\)\.tar\..*$/\1/p')"
+          echo "VV2V_VERSION=$VV2V_VERSION" >> "$GITHUB_ENV"
 
       - name: Download & extract upstream SRPM
         run: |
@@ -61,7 +65,7 @@ jobs:
 
       - name: Copy patched tarball to SOURCES
         run: |
-          cp /__w/virt-v2v/virt-v2v/virt-v2v-2.7.13.tar.gz /root/rpmbuild/SOURCES/
+          cp "$GITHUB_WORKSPACE/$TARBALL" /root/rpmbuild/SOURCES/
        
       - name: Patch spec file
         run: |
@@ -72,8 +76,12 @@ jobs:
           sed -i 's/%global verify_tarball_signature 1/%global verify_tarball_signature 0/' $SPEC_FILE || true
 
           # 2. Force Version to 2.7.13
-          sed -i 's/^Version:.*/Version: 2.7.13/'  $SPEC_FILE
+          sed -i "s/^Version:.*/Version: $VV2V_VERSION/"  $SPEC_FILE
           sed -i 's/^Release:.*/Release: 1.fc42/' $SPEC_FILE
+
+          # Ensure the expected Source0 filename exists in SOURCES.
+          EXPECTED_SOURCE="$(rpmspec -P "$SPEC_FILE" | awk '/^Source0:/ {print $2; exit}' | xargs basename)"
+          cp "$GITHUB_WORKSPACE/$TARBALL" "/root/rpmbuild/SOURCES/$EXPECTED_SOURCE"
 
           # 3. Remove files that are missing in our build (oVirt support)
           sed -i '/virt-v2v-open/d' $SPEC_FILE
@@ -92,5 +100,5 @@ jobs:
       - name: Upload built RPMs
         uses: actions/upload-artifact@v4
         with:
-          name: virt-v2v-2.7.13-rpm
+          name: virt-v2v-${{ env.VV2V_VERSION }}-rpm
           path: /root/rpmbuild/RPMS/x86_64/*.rpm
