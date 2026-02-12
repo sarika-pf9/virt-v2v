@@ -76,8 +76,14 @@ jobs:
       - name: Build custom tarball
         working-directory: ${{ github.workspace }}
         run: |
+          # Ensure build-aux exists and contains the required scripts
+          mkdir -p build-aux
           autoreconf -fiv
-          ./configure
+          
+          # Force the use of build-aux for the configuration phase
+          ./configure --prefix=/usr
+          
+          # Build the source distribution tarball
           make dist
 
       - name: Final Move and Build
