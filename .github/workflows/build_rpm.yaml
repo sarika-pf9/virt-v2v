@@ -76,14 +76,21 @@ jobs:
       - name: Build custom tarball
         working-directory: ${{ github.workspace }}
         run: |
-          # Ensure build-aux exists and contains the required scripts
+          # 1. Prepare auxiliary directory
           mkdir -p build-aux
+          
+          # 2. Run autoreconf to generate scripts into build-aux
           autoreconf -fiv
           
-          # Force the use of build-aux for the configuration phase
-          ./configure --prefix=/usr
+          # 3. CRITICAL: Copy scripts to root where configure expects them
+          cp build-aux/install-sh . 2>/dev/null || cp build-aux/install.sh . 2>/dev/null || true
+          cp build-aux/missing . 2>/dev/null || true
+          cp build-aux/compile . 2>/dev/null || true
+          cp build-aux/config.guess . 2>/dev/null || true
+          cp build-aux/config.sub . 2>/dev/null || true
           
-          # Build the source distribution tarball
+          # 4. Run configure and build distribution
+          ./configure
           make dist
 
       - name: Final Move and Build
