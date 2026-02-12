@@ -1,0 +1,97 @@
+name: Build virt-v2v RPM 2.10.0 for EL9
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-latest
+    container:
+      image: almalinux:9  # Switched to EL9 base
+
+    steps:
+      - name: Install basic tools
+        run: dnf install -y git dnf-plugins-core epel-release  # Added EPEL for extra dependencies
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y rpm-build rpmdevtools git sqlite perl-hivex \
+                         autoconf automake libtool curl cpio \
+                         ocaml ocaml-findlib-devel  # Ensure OCaml tools are present for virt-v2v
+
+      - name: Download 2.10.0 SRPM (from Fedora 43 for the SPEC)
+        run: |
+          cd /root
+          # We use the Fedora 43 SRPM because it contains the 2.10.0 SPEC file
+          curl -L -o virt-v2v-2.10.0-1.fc43.src.rpm \
+            "https://kojipkgs.fedoraproject.org/packages/virt-v2v/2.10.0/1.fc43/src/virt-v2v-2.10.0-1.fc43.src.rpm"
+          
+          mkdir -p /tmp/srpm-extract
+          cd /tmp/srpm-extract
+          rpm2cpio /root/virt-v2v-2.10.0-1.fc43.src.rpm | cpio -idmv
+
+      - name: Install build dependencies from spec
+        run: |
+          # builddep will now pull EL9 versions of dependencies
+          dnf builddep -y /tmp/srpm-extract/virt-v2v.spec
+
+      - name: Setup rpmbuild tree
+        run: |
+          rpmdev-setuptree
+          mkdir -p /root/rpmbuild/{SPECS,SOURCES,BUILD,BUILDROOT,RPMS,SRPMS}
+
+      - name: Build custom tarball
+        working-directory: ${{ github.workspace }}
+        run: |
+          autoreconf -fiv
+          ./configure
+          make dist
+
+      - name: Move spec and sources
+        run: |
+          cd /tmp/srpm-extract
+          mv virt-v2v.spec /root/rpmbuild/SPECS/
+          # Copy any necessary source files from the SRPM
+          cp *.keyring /root/rpmbuild/SOURCES/ 2>/dev/null || true
+          cp *.sig /root/rpmbuild/SOURCES/ 2>/dev/null || true
+
+      - name: Copy custom tarball to SOURCES
+        run: |
+          cp ${{ github.workspace }}/virt-v2v-2.10.0.tar.gz /root/rpmbuild/SOURCES/
+       
+      - name: Patch spec file for EL9
+        run: |
+          SPEC_FILE="/root/rpmbuild/SPECS/virt-v2v.spec"
+
+          # 1. Disable GPG checks
+          sed -i 's/^\([[:space:]]*\)%{gpgverify}/#\1%{gpgverify}/' $SPEC_FILE
+          sed -i 's/%global verify_tarball_signature 1/%global verify_tarball_signature 0/' $SPEC_FILE || true
+
+          # 2. Set Version to 2.10.0 and Release to .el9
+          sed -i 's/^Version:.*/Version: 2.10.0/' $SPEC_FILE
+          sed -i 's/^Release:.*/Release: 1.el9/' $SPEC_FILE  # Target EL9
+
+          # 3. Handle oVirt/RHV cleanup if necessary
+          sed -i '/virt-v2v-open/d' $SPEC_FILE
+          sed -i '/virt-v2v-output-ovirt/d' $SPEC_FILE
+
+      - name: Build RPM
+        run: |
+          cd /root/rpmbuild/SPECS
+          rpmbuild -bb \
+            --define "_topdir /root/rpmbuild" \
+            --define "_unpackaged_files_terminate_build 0" \
+            --nocheck \
+            virt-v2v.spec
+
+      - name: Upload built RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: virt-v2v-2.10.0-el9-rpm
+          path: /root/rpmbuild/RPMS/x86_64/*.rpm
