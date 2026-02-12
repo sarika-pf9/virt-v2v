@@ -82,12 +82,13 @@ jobs:
           # 2. Run autoreconf to generate scripts into build-aux
           autoreconf -fiv
           
-          # 3. CRITICAL: Copy scripts to root where configure expects them
-          cp build-aux/install-sh . 2>/dev/null || cp build-aux/install.sh . 2>/dev/null || true
-          cp build-aux/missing . 2>/dev/null || true
-          cp build-aux/compile . 2>/dev/null || true
-          cp build-aux/config.guess . 2>/dev/null || true
-          cp build-aux/config.sub . 2>/dev/null || true
+          # 3. CRITICAL: Copy scripts to root and ensure they are executable
+          for f in install-sh install.sh missing compile config.guess config.sub; do
+            if [ -f "build-aux/$f" ]; then
+              cp "build-aux/$f" .
+              chmod +x "$f"
+            fi
+          done
           
           # 4. Run configure and build distribution
           ./configure
