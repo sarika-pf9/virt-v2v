@@ -8,18 +8,14 @@ jobs:
   build-rpm:
     runs-on: ubuntu-latest
     container:
-      image: almalinux:9  # Using EL9 base for compatibility
+      image: almalinux:9  #
 
     steps:
       - name: Install repository configurations
-        run: |
-          # Install EPEL for additional build tools and dnf-plugins-core for config-manager
-          dnf install -y git dnf-plugins-core epel-release 
+        run: dnf install -y git dnf-plugins-core epel-release 
 
       - name: Resolve curl-minimal conflicts
         run: |
-          # EL9-based systems ship curl-minimal by default which conflicts with full curl
-          # Swap to full curl to support all protocols required for the build
           dnf swap -y curl-minimal curl
           dnf swap -y libcurl-minimal libcurl
 
@@ -28,32 +24,48 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install build dependencies
+      - name: Install basic build tools
         run: |
-          # Enable CRB repository to access OCaml (virt-v2v is ~59% OCaml)
           dnf config-manager --set-enabled crb
-          
-          # Install development tools and compilers from CRB/EPEL
           dnf install -y --allowerasing \
                          rpm-build rpmdevtools git sqlite perl-hivex \
                          autoconf automake libtool curl cpio \
                          ocaml ocaml-findlib-devel 
 
-      - name: Download 2.10.0 SRPM (from Fedora 43 for the SPEC)
+      - name: Extract Fedora 43 SPEC file
         run: |
           cd /root
-          # Use the Fedora 43 SRPM to obtain the newer 2.10.0 version SPEC file
           curl -L -o virt-v2v-2.10.0-1.fc43.src.rpm \
             "https://kojipkgs.fedoraproject.org/packages/virt-v2v/2.10.0/1.fc43/src/virt-v2v-2.10.0-1.fc43.src.rpm"
-          
           mkdir -p /tmp/srpm-extract
           cd /tmp/srpm-extract
           rpm2cpio /root/virt-v2v-2.10.0-1.fc43.src.rpm | cpio -idmv
 
-      - name: Install build dependencies from spec
+      # CRITICAL STEP: Patch the SPEC file BEFORE dnf builddep
+      - name: Patch spec file for EL9 compatibility
         run: |
-          # Install additional dependencies defined within the spec file
-          # dnf builddep will now pull EL9 versions of dependencies
+          SPEC_FILE="/tmp/srpm-extract/virt-v2v.spec"
+
+          # 1. Lower version requirements to match EL9 availability
+          sed -i 's/libguestfs-devel >= 1:1.58.0-1/libguestfs-devel >= 1:1.52.0/' $SPEC_FILE
+          sed -i 's/libnbd-devel >= 1.22/libnbd-devel >= 1.16/' $SPEC_FILE
+          sed -i 's/nbdkit-server >= 1.46.1/nbdkit-server >= 1.38/' $SPEC_FILE
+          
+          # 2. Remove missing EL9 packages
+          sed -i '/BuildRequires:.*libosinfo-devel/d' $SPEC_FILE
+          sed -i '/BuildRequires:.*mingw-srvany/d' $SPEC_FILE
+
+          # 3. Disable GPG checks
+          sed -i 's/^\([[:space:]]*\)%{gpgverify}/#\1%{gpgverify}/' $SPEC_FILE
+          sed -i 's/%global verify_tarball_signature 1/%global verify_tarball_signature 0/' $SPEC_FILE || true
+
+          # 4. Set Version and Release
+          sed -i 's/^Version:.*/Version: 2.10.0/' $SPEC_FILE
+          sed -i 's/^Release:.*/Release: 1.el9/' $SPEC_FILE 
+
+      - name: Install build dependencies from patched spec
+        run: |
+          # Now this will succeed because requirements are >= 1.16 instead of 1.22
           dnf builddep -y --allowerasing /tmp/srpm-extract/virt-v2v.spec
 
       - name: Setup rpmbuild tree
@@ -68,38 +80,14 @@ jobs:
           ./configure
           make dist
 
-      - name: Move spec and sources
+      - name: Final Move and Build
         run: |
-          cd /tmp/srpm-extract
-          mv virt-v2v.spec /root/rpmbuild/SPECS/
-          # Copy keyring/sig files if they exist in the SRPM
-          cp *.keyring /root/rpmbuild/SOURCES/ 2>/dev/null || true
-          cp *.sig /root/rpmbuild/SOURCES/ 2>/dev/null || true
-
-      - name: Copy custom tarball to SOURCES
-        run: |
+          mv /tmp/srpm-extract/virt-v2v.spec /root/rpmbuild/SPECS/
+          cp /tmp/srpm-extract/*.keyring /root/rpmbuild/SOURCES/ 2>/dev/null || true
+          cp /tmp/srpm-extract/*.sig /root/rpmbuild/SOURCES/ 2>/dev/null || true
           cp ${{ github.workspace }}/virt-v2v-2.10.0.tar.gz /root/rpmbuild/SOURCES/
-       
-      - name: Patch spec file for EL9
-        run: |
-          SPEC_FILE="/root/rpmbuild/SPECS/virt-v2v.spec"
-
-          # 1. Disable GPG and tarball signature checks for custom build
-          sed -i 's/^\([[:space:]]*\)%{gpgverify}/#\1%{gpgverify}/' $SPEC_FILE
-          sed -i 's/%global verify_tarball_signature 1/%global verify_tarball_signature 0/' $SPEC_FILE || true
-
-          # 2. Update metadata to target EL9 instead of Fedora
-          sed -i 's/^Version:.*/Version: 2.10.0/' $SPEC_FILE
-          sed -i 's/^Release:.*/Release: 1.el9/' $SPEC_FILE 
-
-          # 3. Remove oVirt output dependencies if they conflict with your environment
-          sed -i '/virt-v2v-open/d' $SPEC_FILE
-          sed -i '/virt-v2v-output-ovirt/d' $SPEC_FILE
-
-      - name: Build RPM
-        run: |
+          
           cd /root/rpmbuild/SPECS
-          # Execute the build, ignoring unpackaged files like extra documentation
           rpmbuild -bb \
             --define "_topdir /root/rpmbuild" \
             --define "_unpackaged_files_terminate_build 0" \
