@@ -21,9 +21,13 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # Enable CRB repository to access OCaml and other dev tools
+          dnf config-manager --set-enabled crb
+          
+          # Install dependencies including OCaml from CRB
           dnf install -y rpm-build rpmdevtools git sqlite perl-hivex \
                          autoconf automake libtool curl cpio \
-                         ocaml ocaml-findlib-devel  # Ensure OCaml tools are present for virt-v2v
+                         ocaml ocaml-findlib-devel
 
       - name: Download 2.10.0 SRPM (from Fedora 43 for the SPEC)
         run: |
